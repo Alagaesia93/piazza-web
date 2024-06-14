@@ -1,0 +1,94 @@
+// generate ci for github actions on pr open and push to master
+// run rubocop, brakeeman, rspec, and simplecov
+
+name: 'Piazza-CI'
+on:
+  pull_request:
+    types:
+      - opened
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+env:
+  PGUSER: postgres
+  PGPASSWORD: postgres
+  BUNDLE_ENTERPRISE__CONTRIBSYS__COM: ${{ secrets.SIDEKIQ_ENT_CONTRIBSYS_KEY }}
+jobs:
+  yarn:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable Corepack
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        env:
+          FORCE_COLOR: 0
+        with:
+          node-version: '20'
+          cache: 'yarn'
+      - uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-v4-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-v4-
+      - name: Yarn install
+        run: yarn install --immutable
+        env:
+          CYPRESS_INSTALL_BINARY: 0
+      - run: yarn cypress -v > .cypress-version
+      - uses: actions/cache@v4
+        id: cypress-cache
+        with:
+          path: ~/.cache/Cypress
+          key: cypress-cache-v6-${{ runner.os }}-${{ hashFiles('.cypress-version') }}
+      - name: Install Cypress
+        run: yarn cypress install
+        if: steps.cypress-cache.outputs.cache-hit != 'true'
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+  rubocop:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    needs: [bundle, yarn]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-v4-${{ hashFiles('yarn.lock') }}
+      - run: bundle exec rubocop --format github
+  brakeman:
+    runs-on: ubuntu-22.04
+    needs: [bundle]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - run: bundle exec brakeman --color --skip-files node_modules/ --no-exit-on-warn
+  rspec:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    needs: [bundle, yarn]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+      - uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-v4-${{ hashFiles('yarn.lock') }}
+      - run: bundle exec rspec
